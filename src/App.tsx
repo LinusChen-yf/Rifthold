@@ -428,7 +428,7 @@ function App() {
   );
 
   return (
-    <div className="relative min-h-screen bg-slate-950/95 text-slate-100">
+    <div className="relative h-screen overflow-y-auto bg-slate-950/95 text-slate-100">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(56,189,248,0.12),transparent_35%)]" />
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_80%_0%,rgba(99,102,241,0.1),transparent_35%)]" />
 
