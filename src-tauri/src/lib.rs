@@ -187,6 +187,19 @@ fn get_window_thumbnail(window_id: String) -> Option<String> {
 }
 
 #[tauri::command]
+fn check_screen_recording_permission() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        macos::has_screen_recording_permission()
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        true
+    }
+}
+
+#[tauri::command]
 fn get_shortcut(config: State<ShortcutConfig>) -> String {
     config.current.lock().unwrap().clone()
 }
@@ -352,7 +365,8 @@ pub fn run() {
             get_window_thumbnail,
             refresh_windows_async,
             get_shortcut,
-            set_shortcut
+            set_shortcut,
+            check_screen_recording_permission
         ])
         .setup(|app| register_shortcuts(app).map_err(Into::into))
         .run(tauri::generate_context!())
@@ -507,6 +521,7 @@ mod macos {
 
     #[link(name = "CoreGraphics", kind = "framework")]
     extern "C" {
+        fn CGPreflightScreenCaptureAccess() -> bool;
         fn CGWindowListCreateImage(
             screen_bounds: CGRect,
             list_option: u32,
@@ -521,6 +536,10 @@ mod macos {
         fn CFDataGetLength(data: CFTypeRef) -> isize;
         fn CGImageGetBytesPerRow(image: CGImageRef) -> usize;
         fn CGImageRelease(image: CGImageRef);
+    }
+
+    pub fn has_screen_recording_permission() -> bool {
+        unsafe { CGPreflightScreenCaptureAccess() }
     }
 
     pub fn capture_window_thumbnail(window_id: i64, max_width: u32) -> Option<String> {

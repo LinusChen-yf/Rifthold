@@ -71,7 +71,6 @@ const WindowCard = memo(function WindowCard({
 }: WindowCardProps) {
   const displayTitle = windowInfo.title || windowInfo.appName;
   const gradient = gradientForIndex(index);
-  const showFallbackBadge = windowInfo.isTitleFallback;
   const hasThumbnail = !!windowInfo.thumbnail;
 
   return (
@@ -129,13 +128,8 @@ const WindowCard = memo(function WindowCard({
           >
             {displayTitle}
           </p>
-          <p className="flex items-center gap-2 truncate text-sm text-slate-400">
+          <p className="truncate text-sm text-slate-400">
             {windowInfo.appName}
-            {showFallbackBadge && (
-              <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-amber-200">
-                Title unavailable
-              </span>
-            )}
           </p>
         </div>
         <div className="flex items-center justify-between text-xs text-slate-400">
@@ -175,6 +169,7 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [shortcut, setShortcut] = useState("alt+space");
   const [editingShortcut, setEditingShortcut] = useState("");
+  const [hasScreenRecordingPermission, setHasScreenRecordingPermission] = useState(true);
   const searchRef = useRef<HTMLInputElement>(null);
   const isComposingRef = useRef(false);
 
@@ -214,6 +209,7 @@ function App() {
     searchRef.current?.focus();
 
     invoke<string>("get_shortcut").then(setShortcut).catch(console.error);
+    invoke<boolean>("check_screen_recording_permission").then(setHasScreenRecordingPermission).catch(console.error);
 
     // Listen for window list updates from backend
     const setupListeners = async () => {
@@ -422,10 +418,6 @@ function App() {
     filteredWindows.length === windows.length && !normalizedQuery
       ? "All windows at a glance"
       : `Filtered ${filteredWindows.length} of ${windows.length}`;
-  const hasMissingTitles = useMemo(
-    () => windows.some((item) => item.isTitleFallback),
-    [windows],
-  );
 
   return (
     <div className="relative h-screen overflow-y-auto bg-slate-950/95 text-slate-100">
@@ -464,13 +456,13 @@ function App() {
           </div>
         </header>
 
-        {hasMissingTitles && (
+        {!hasScreenRecordingPermission && (
           <div className="flex items-start gap-3 rounded-2xl border border-amber-400/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
             <div className="mt-[2px] h-2 w-2 rounded-full bg-amber-300" />
             <div className="space-y-1">
-              <p className="font-semibold">Some window titles are unavailable.</p>
+              <p className="font-semibold">Screen Recording permission required</p>
               <p className="text-amber-100/80">
-                Grant <strong>Screen Recording</strong> permission to Rifthold (or your dev terminal) in System Settings → Privacy & Security → Screen Recording to see window titles and thumbnails.
+                Grant <strong>Screen Recording</strong> permission to Rifthold in System Settings → Privacy & Security → Screen Recording to see window titles and thumbnails.
               </p>
             </div>
           </div>
