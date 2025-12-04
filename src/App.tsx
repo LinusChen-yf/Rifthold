@@ -170,6 +170,7 @@ function App() {
   const [shortcut, setShortcut] = useState("alt+space");
   const [editingShortcut, setEditingShortcut] = useState("");
   const [hasScreenRecordingPermission, setHasScreenRecordingPermission] = useState(true);
+  const [showHelp, setShowHelp] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const isComposingRef = useRef(false);
 
@@ -197,10 +198,11 @@ function App() {
   const normalizedQuery = query.trim().toLowerCase();
   const filteredWindows = useMemo(() => {
     if (!normalizedQuery) return windows;
+    const terms = normalizedQuery.split(/\s+/);
     return windows.filter((windowInfo) => {
       const title = windowInfo.title.toLowerCase();
       const app = windowInfo.appName.toLowerCase();
-      return title.includes(normalizedQuery) || app.includes(normalizedQuery);
+      return terms.every(term => app.includes(term) || title.includes(term));
     });
   }, [normalizedQuery, windows]);
 
@@ -426,15 +428,9 @@ function App() {
 
       <div className="relative mx-auto flex max-w-6xl flex-col gap-6 px-6 pb-10 pt-10">
         <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="space-y-1">
-            <p className="text-xs uppercase tracking-[0.18em] text-cyan-200">
-              Rifthold overview
-            </p>
-            <h1 className="text-3xl font-semibold text-white">Switch without the mouse.</h1>
-            <p className="text-sm text-slate-400">
-              Type to filter, use Ctrl + ↑↓←→ or Ctrl + hjkl to navigate, Enter to activate, Esc to hide.
-            </p>
-          </div>
+          <p className="text-lg font-semibold uppercase tracking-[0.12em] text-cyan-200">
+            Rifthold overview
+          </p>
           <div className="flex items-center gap-2">
             <div className="flex items-center gap-3 rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-300">
               <span className="rounded-full bg-white/10 px-2 py-1 font-semibold uppercase tracking-[0.16em]">
@@ -442,6 +438,18 @@ function App() {
               </span>
               <span className="hidden text-slate-400 sm:inline">global toggle</span>
             </div>
+            <button
+              type="button"
+              onClick={() => setShowHelp(true)}
+              className="rounded-full bg-white/5 p-2 transition hover:bg-white/10"
+              title="Help"
+            >
+              <svg className="h-4 w-4 text-slate-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="10" />
+                <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+                <circle cx="12" cy="17" r="0.5" fill="currentColor" />
+              </svg>
+            </button>
             <button
               type="button"
               onClick={() => {
@@ -573,6 +581,39 @@ function App() {
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {showHelp && (
+        <div className="fixed inset-0 flex items-center justify-center bg-black/50" onClick={() => setShowHelp(false)}>
+          <div className="w-[28rem] rounded-2xl border border-white/10 bg-slate-900 p-6" onClick={(e) => e.stopPropagation()}>
+            <h2 className="mb-4 text-xl font-semibold text-white">Help</h2>
+            <div className="space-y-4 text-sm text-slate-300">
+              <div>
+                <h3 className="mb-2 font-semibold text-white">Window Navigation</h3>
+                <ul className="list-inside list-disc space-y-1 text-slate-400">
+                  <li>Ctrl + ↑↓←→ or Ctrl + hjkl to navigate</li>
+                  <li>Enter to activate selected window</li>
+                  <li>Esc to hide overlay</li>
+                </ul>
+              </div>
+              <div>
+                <h3 className="mb-2 font-semibold text-white">Search</h3>
+                <ul className="list-inside list-disc space-y-1 text-slate-400">
+                  <li>Type to filter by app name or window title</li>
+                  <li>Use spaces to separate multiple keywords</li>
+                  <li>E.g. <code className="rounded bg-white/10 px-1">code vib</code> matches windows where app contains "code" and title contains "vib"</li>
+                </ul>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowHelp(false)}
+              className="mt-4 w-full rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/10"
+            >
+              Close
+            </button>
           </div>
         </div>
       )}
