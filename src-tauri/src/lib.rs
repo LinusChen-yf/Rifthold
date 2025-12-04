@@ -200,6 +200,11 @@ fn check_screen_recording_permission() -> bool {
 }
 
 #[tauri::command]
+fn log_debug(msg: String) {
+    println!("{}", msg);
+}
+
+#[tauri::command]
 fn get_shortcut(config: State<ShortcutConfig>) -> String {
     config.current.lock().unwrap().clone()
 }
@@ -355,6 +360,7 @@ pub fn run() {
     let config = load_config();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_shell::init())
         .manage(WindowService::new(provider))
         .manage(ShortcutConfig {
             current: Mutex::new(config.shortcut),
@@ -366,7 +372,8 @@ pub fn run() {
             refresh_windows_async,
             get_shortcut,
             set_shortcut,
-            check_screen_recording_permission
+            check_screen_recording_permission,
+            log_debug
         ])
         .setup(|app| register_shortcuts(app).map_err(Into::into))
         .run(tauri::generate_context!())

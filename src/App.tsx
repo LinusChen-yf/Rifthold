@@ -8,8 +8,85 @@ import {
   type SVGProps,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
+
+type ColorMode = "system" | "light" | "dark";
+
+function useColorMode() {
+  const [mode, setMode] = useState<ColorMode>(() => {
+    return (localStorage.getItem("colorMode") as ColorMode) || "system";
+  });
+
+  useEffect(() => {
+    const root = document.documentElement;
+    const apply = (m: ColorMode) => {
+      const isDark = m === "system"
+        ? window.matchMedia("(prefers-color-scheme: dark)").matches
+        : m === "dark";
+      root.classList.toggle("dark", isDark);
+    };
+
+    apply(mode);
+    localStorage.setItem("colorMode", mode);
+
+    if (mode === "system") {
+      const mq = window.matchMedia("(prefers-color-scheme: dark)");
+      const handler = () => apply("system");
+      mq.addEventListener("change", handler);
+      return () => mq.removeEventListener("change", handler);
+    }
+  }, [mode]);
+
+  return [mode, setMode] as const;
+}
+
+function useTheme() {
+  const [themeName, setThemeName] = useState(() => localStorage.getItem("themeName") || "claude");
+  const [themeList, setThemeList] = useState<string[]>(() => {
+    const saved = localStorage.getItem("themeList");
+    return saved ? JSON.parse(saved) : ["claude"];
+  });
+  const [themeStyle, setThemeStyle] = useState<HTMLStyleElement | null>(null);
+
+  const loadTheme = useCallback(async (name: string) => {
+    try {
+      const res = await fetch(`https://tweakcn.com/r/themes/${name}.json`);
+      if (!res.ok) throw new Error("Theme not found");
+      const data = await res.json();
+
+      const cssContent = data.files?.find((f: { path: string; content: string }) => f.path.endsWith(".css"))?.content;
+      if (!cssContent) return;
+
+      if (themeStyle) themeStyle.remove();
+
+      const style = document.createElement("style");
+      style.id = "tweakcn-theme";
+      style.textContent = cssContent;
+      document.head.appendChild(style);
+      setThemeStyle(style);
+
+      localStorage.setItem("themeName", name);
+      setThemeName(name);
+
+      // Add to list if not exists
+      setThemeList(prev => {
+        if (prev.includes(name)) return prev;
+        const newList = [name, ...prev];
+        localStorage.setItem("themeList", JSON.stringify(newList));
+        return newList;
+      });
+    } catch (e) {
+      console.warn("Failed to load theme:", e);
+    }
+  }, [themeStyle]);
+
+  return { themeName, themeList, loadTheme };
+}
+
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+
+// Log to terminal (useful for debugging in Tauri dev mode)
+const log = (msg: string) => invoke("log_debug", { msg });
 
 function SettingsIcon(props: SVGProps<SVGSVGElement>) {
   return (
@@ -17,6 +94,40 @@ function SettingsIcon(props: SVGProps<SVGSVGElement>) {
       <circle cx="12" cy="12" r="3" />
       <path d="M12 1v6m0 6v6M5.6 5.6l4.2 4.2m4.2 4.2l4.2 4.2M1 12h6m6 0h6M5.6 18.4l4.2-4.2m4.2-4.2l4.2-4.2" />
     </svg>
+  );
+}
+
+
+function ColorModeToggle({ colorMode, setColorMode }: { colorMode: ColorMode; setColorMode: (m: ColorMode) => void }) {
+  const [open, setOpen] = useState(false);
+  const labels = { system: "System", light: "Light", dark: "Dark" };
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen(!open)}
+        className="flex items-center gap-1.5 rounded-full bg-muted px-3 py-2 text-xs text-foreground transition hover:bg-accent"
+      >
+        {labels[colorMode]}
+        <svg className="h-3 w-3" viewBox="0 0 12 12" fill="currentColor"><path d="M3 5l3 3 3-3" /></svg>
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 top-full mt-1 z-50 rounded-lg border border-border bg-popover shadow-lg overflow-hidden">
+            {(["system", "light", "dark"] as const).map((m) => (
+              <button
+                key={m}
+                onClick={() => { setColorMode(m); setOpen(false); }}
+                className={`block w-full px-4 py-2 text-left text-sm hover:bg-accent ${colorMode === m ? "text-primary font-medium" : "text-foreground"}`}
+              >
+                {labels[m]}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -78,15 +189,15 @@ const WindowCard = memo(function WindowCard({
       type="button"
       onClick={onSelect}
       onDoubleClick={onActivate}
-      className={`group flex h-full flex-col overflow-hidden rounded-2xl border bg-white/5 transition duration-150 ease-out ${
+      className={`group flex h-full flex-col overflow-hidden rounded-2xl border bg-card transition duration-150 ease-out ${
         selected
-          ? "border-cyan-200/60 shadow-glow ring-1 ring-cyan-200/30"
-          : "border-white/10 hover:border-white/20 hover:bg-white/10"
-      } focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950`}
+          ? "border-primary shadow-lg ring-1 ring-ring"
+          : "border-border hover:border-primary/50 hover:bg-accent"
+      } focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring`}
       aria-pressed={selected}
     >
       <div
-        className="relative aspect-video w-full overflow-hidden rounded-xl bg-slate-900/60"
+        className="relative aspect-video w-full overflow-hidden rounded-xl bg-muted"
         style={hasThumbnail ? {} : { backgroundImage: gradient }}
       >
         {hasThumbnail ? (
@@ -106,7 +217,7 @@ const WindowCard = memo(function WindowCard({
             {windowInfo.appName}
           </span>
           {selected && (
-            <span className="rounded-full bg-white/25 px-2 py-1 text-[11px] font-semibold text-white">
+            <span className="rounded-full bg-primary px-2 py-1 text-[11px] font-semibold text-primary-foreground">
               Selected
             </span>
           )}
@@ -114,11 +225,11 @@ const WindowCard = memo(function WindowCard({
       </div>
       <div className="flex flex-1 flex-col justify-between gap-2 p-4 text-left">
         <div className="space-y-1">
-          <p className="text-[11px] uppercase tracking-[0.14em] text-slate-400">
+          <p className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
             Window
           </p>
           <p
-            className="text-base font-semibold leading-snug text-slate-50"
+            className="text-base font-semibold leading-snug text-foreground"
             style={{
               display: "-webkit-box",
               WebkitLineClamp: 2,
@@ -128,13 +239,13 @@ const WindowCard = memo(function WindowCard({
           >
             {displayTitle}
           </p>
-          <p className="truncate text-sm text-slate-400">
+          <p className="truncate text-sm text-muted-foreground">
             {windowInfo.appName}
           </p>
         </div>
-        <div className="flex items-center justify-between text-xs text-slate-400">
-          <span className="rounded-full bg-white/5 px-2 py-1">#{index + 1}</span>
-          <span className="hidden items-center gap-1 rounded-full border border-white/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-300 sm:flex">
+        <div className="flex items-center justify-between text-xs text-muted-foreground">
+          <span className="rounded-full bg-muted px-2 py-1">#{index + 1}</span>
+          <span className="hidden items-center gap-1 rounded-full border border-border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] sm:flex">
             Enter to switch
           </span>
         </div>
@@ -146,6 +257,9 @@ const WindowCard = memo(function WindowCard({
 const CACHE_KEY = "rifthold_windows_cache";
 
 function App() {
+  const [colorMode, setColorMode] = useColorMode();
+  const { themeName, themeList, loadTheme } = useTheme();
+
   // Load from cache on mount
   const loadFromCache = useCallback(() => {
     try {
@@ -337,9 +451,8 @@ function App() {
     try {
       const windowInstance = getCurrentWindow();
       await windowInstance.hide();
-      console.log("[hide] window hidden");
     } catch (error) {
-      console.info("hide window (mock during web dev)", error);
+      console.warn("hide window failed", error);
     }
   }, []);
 
@@ -422,29 +535,24 @@ function App() {
       : `Filtered ${filteredWindows.length} of ${windows.length}`;
 
   return (
-    <div className="relative h-screen overflow-y-auto bg-slate-950/95 text-slate-100">
+    <div className="relative h-screen overflow-y-auto bg-background text-foreground">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(56,189,248,0.12),transparent_35%)]" />
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_80%_0%,rgba(99,102,241,0.1),transparent_35%)]" />
 
       <div className="relative mx-auto flex max-w-6xl flex-col gap-6 px-6 pb-10 pt-10">
         <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-lg font-semibold uppercase tracking-[0.12em] text-cyan-200">
+          <p className="text-lg font-semibold uppercase tracking-[0.12em] text-primary">
             Rifthold overview
           </p>
           <div className="flex items-center gap-2">
-            <div className="flex items-center gap-3 rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-300">
-              <span className="rounded-full bg-white/10 px-2 py-1 font-semibold uppercase tracking-[0.16em]">
-                {shortcut.replace("+", " + ")}
-              </span>
-              <span className="hidden text-slate-400 sm:inline">global toggle</span>
-            </div>
+            <ColorModeToggle colorMode={colorMode} setColorMode={setColorMode} />
             <button
               type="button"
               onClick={() => setShowHelp(true)}
-              className="rounded-full bg-white/5 p-2 transition hover:bg-white/10"
+              className="rounded-full bg-muted p-2 transition hover:bg-accent"
               title="Help"
             >
-              <svg className="h-4 w-4 text-slate-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <svg className="h-4 w-4 text-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <circle cx="12" cy="12" r="10" />
                 <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
                 <circle cx="12" cy="17" r="0.5" fill="currentColor" />
@@ -456,10 +564,10 @@ function App() {
                 setEditingShortcut(shortcut);
                 setShowSettings(true);
               }}
-              className="rounded-full bg-white/5 p-2 transition hover:bg-white/10"
+              className="rounded-full bg-muted p-2 transition hover:bg-accent"
               title="Settings"
             >
-              <SettingsIcon className="h-4 w-4 text-slate-300" />
+              <SettingsIcon className="h-4 w-4 text-foreground" />
             </button>
           </div>
         </header>
@@ -477,8 +585,8 @@ function App() {
         )}
 
         <div className="flex flex-col gap-2">
-          <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 shadow-[0_10px_35px_rgba(0,0,0,0.35)] focus-within:border-cyan-200/60">
-            <SearchIcon className="h-5 w-5 text-slate-400" />
+          <div className="flex items-center gap-3 rounded-2xl border border-border bg-card px-4 py-3 shadow-lg focus-within:border-ring">
+            <SearchIcon className="h-5 w-5 text-muted-foreground" />
             <input
               ref={searchRef}
               value={query}
@@ -486,9 +594,9 @@ function App() {
               onCompositionStart={() => { isComposingRef.current = true; }}
               onCompositionEnd={() => { isComposingRef.current = false; }}
               placeholder="Search by window title or app…"
-              className="w-full bg-transparent text-base text-white placeholder:text-slate-500 outline-none"
+              className="w-full bg-transparent text-base text-foreground placeholder:text-muted-foreground outline-none"
             />
-            <span className="rounded-full bg-white/5 px-3 py-1 text-xs text-slate-300 whitespace-nowrap">
+            <span className="rounded-full bg-muted px-3 py-1 text-xs text-muted-foreground whitespace-nowrap">
               {filteredWindows.length} / {windows.length}
             </span>
             <button
@@ -500,7 +608,7 @@ function App() {
                   setLoadingThumbnails(false);
                 });
               }}
-              className="flex items-center gap-1.5 rounded-full bg-cyan-500 px-3 py-1.5 text-xs font-semibold text-slate-950 transition hover:bg-cyan-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-200"
+              className="flex items-center gap-1.5 rounded-full bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               title="Refresh with thumbnails"
             >
               <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -509,7 +617,7 @@ function App() {
               Refresh
             </button>
           </div>
-          <div className="flex items-center justify-between text-xs text-slate-400">
+          <div className="flex items-center justify-between text-xs text-muted-foreground">
             <span>{headline}</span>
             {isLoading && <span>Loading windows…</span>}
             {loadingThumbnails && <span>Loading thumbnails…</span>}
@@ -533,28 +641,69 @@ function App() {
         </section>
 
         {filteredWindows.length === 0 && (
-          <div className="rounded-2xl border border-white/10 bg-white/5 px-6 py-10 text-center text-slate-300">
-            <p className="text-lg font-semibold text-white">No windows match</p>
-            <p className="text-sm text-slate-400">Try a different keyword or clear the search box.</p>
+          <div className="rounded-2xl border border-border bg-card px-6 py-10 text-center text-muted-foreground">
+            <p className="text-lg font-semibold text-foreground">No windows match</p>
+            <p className="text-sm">Try a different keyword or clear the search box.</p>
           </div>
         )}
       </div>
 
       {showSettings && (
         <div className="fixed inset-0 flex items-center justify-center bg-black/50" onClick={() => setShowSettings(false)}>
-          <div className="w-96 rounded-2xl border border-white/10 bg-slate-900 p-6" onClick={(e) => e.stopPropagation()}>
-            <h2 className="mb-4 text-xl font-semibold text-white">Settings</h2>
+          <div className="w-96 rounded-2xl border border-border bg-popover p-6" onClick={(e) => e.stopPropagation()}>
+            <h2 className="mb-4 text-xl font-semibold text-foreground">Settings</h2>
             <div className="space-y-4">
               <div>
-                <label className="mb-2 block text-sm text-slate-300">Global Shortcut</label>
+                <label className="mb-2 block text-sm text-muted-foreground">Global Shortcut</label>
                 <input
                   type="text"
                   value={editingShortcut}
                   onChange={(e) => setEditingShortcut(e.target.value)}
                   placeholder="e.g., alt+space, cmd+shift+o"
-                  className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-white outline-none focus:border-cyan-200/60"
+                  className="w-full rounded-lg border border-input bg-background px-3 py-2 text-foreground outline-none focus:border-ring"
                 />
-                <p className="mt-1 text-xs text-slate-400">Examples: alt+space, cmd+shift+o, ctrl+`</p>
+                <p className="mt-1 text-xs text-muted-foreground">Examples: alt+space, cmd+shift+o, ctrl+`</p>
+              </div>
+              <div>
+                <label className="mb-2 block text-sm text-muted-foreground">Theme</label>
+                <div className="flex flex-wrap gap-1 mb-2">
+                  {themeList.map((t) => (
+                    <button
+                      key={t}
+                      onClick={() => loadTheme(t)}
+                      className={`px-2 py-1.5 text-xs rounded transition ${themeName === t ? "bg-primary text-primary-foreground" : "bg-muted hover:bg-accent text-foreground"}`}
+                    >
+                      {t}
+                    </button>
+                  ))}
+                </div>
+                <input
+                  type="text"
+                  placeholder="Enter theme name..."
+                  className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-ring"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      loadTheme((e.target as HTMLInputElement).value);
+                      (e.target as HTMLInputElement).value = "";
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setShowSettings(false);
+                    try {
+                      const { open } = await import("@tauri-apps/plugin-shell");
+                      await open("https://tweakcn.com/editor/theme");
+                      await hideOverlay();
+                    } catch (err) {
+                      console.error("[browse] error:", err);
+                    }
+                  }}
+                  className="mt-2 w-full rounded-lg border border-border bg-muted px-3 py-2 text-xs text-muted-foreground hover:bg-accent"
+                >
+                  Browse themes at tweakcn.com
+                </button>
               </div>
               <div className="flex gap-2">
                 <button
@@ -568,14 +717,14 @@ function App() {
                       alert(`Failed to set shortcut: ${error}`);
                     }
                   }}
-                  className="flex-1 rounded-lg bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-cyan-400"
+                  className="flex-1 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground transition hover:opacity-90"
                 >
                   Save
                 </button>
                 <button
                   type="button"
                   onClick={() => setShowSettings(false)}
-                  className="flex-1 rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/10"
+                  className="flex-1 rounded-lg border border-border bg-muted px-4 py-2 text-sm font-semibold text-foreground transition hover:bg-accent"
                 >
                   Cancel
                 </button>
@@ -587,30 +736,30 @@ function App() {
 
       {showHelp && (
         <div className="fixed inset-0 flex items-center justify-center bg-black/50" onClick={() => setShowHelp(false)}>
-          <div className="w-[28rem] rounded-2xl border border-white/10 bg-slate-900 p-6" onClick={(e) => e.stopPropagation()}>
-            <h2 className="mb-4 text-xl font-semibold text-white">Help</h2>
-            <div className="space-y-4 text-sm text-slate-300">
+          <div className="w-[28rem] rounded-2xl border border-border bg-popover p-6" onClick={(e) => e.stopPropagation()}>
+            <h2 className="mb-4 text-xl font-semibold text-foreground">Help</h2>
+            <div className="space-y-4 text-sm text-muted-foreground">
               <div>
-                <h3 className="mb-2 font-semibold text-white">Window Navigation</h3>
-                <ul className="list-inside list-disc space-y-1 text-slate-400">
+                <h3 className="mb-2 font-semibold text-foreground">Window Navigation</h3>
+                <ul className="list-inside list-disc space-y-1">
                   <li>Ctrl + ↑↓←→ or Ctrl + hjkl to navigate</li>
                   <li>Enter to activate selected window</li>
                   <li>Esc to hide overlay</li>
                 </ul>
               </div>
               <div>
-                <h3 className="mb-2 font-semibold text-white">Search</h3>
-                <ul className="list-inside list-disc space-y-1 text-slate-400">
+                <h3 className="mb-2 font-semibold text-foreground">Search</h3>
+                <ul className="list-inside list-disc space-y-1">
                   <li>Type to filter by app name or window title</li>
                   <li>Use spaces to separate multiple keywords</li>
-                  <li>E.g. <code className="rounded bg-white/10 px-1">code vib</code> matches windows where app contains "code" and title contains "vib"</li>
+                  <li>E.g. <code className="rounded bg-accent px-1">code vib</code> matches windows where app contains "code" and title contains "vib"</li>
                 </ul>
               </div>
             </div>
             <button
               type="button"
               onClick={() => setShowHelp(false)}
-              className="mt-4 w-full rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/10"
+              className="mt-4 w-full rounded-lg border border-border bg-secondary px-4 py-2 text-sm font-semibold text-foreground transition hover:bg-accent"
             >
               Close
             </button>
