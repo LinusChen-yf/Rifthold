@@ -31,5 +31,5 @@ dirs = "5"
 core-graphics = "0.24"
 core-foundation = "0.10"
 cocoa = "0.25"
-image = "0.25"
+image = { version = "0.25", features = ["jpeg"] }
 rayon = "1.10"

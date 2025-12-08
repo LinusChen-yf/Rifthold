@@ -400,6 +400,7 @@ mod macos {
     };
     use core_graphics::{
         display::CGRect,
+        geometry::{CGPoint, CGSize},
         window::{
             create_description_from_array, create_window_list, kCGNullWindowID,
             kCGWindowLayer, kCGWindowListExcludeDesktopElements, kCGWindowListOptionOnScreenOnly,
@@ -410,7 +411,7 @@ mod macos {
     use cocoa::appkit::{NSApplicationActivateIgnoringOtherApps, NSRunningApplication};
     use cocoa::base::nil;
     use std::{collections::HashMap, process::Command, sync::{Arc, Mutex}, time::Instant};
-    use image::{ImageBuffer, Rgba, imageops::FilterType, ImageEncoder};
+    use image::ImageEncoder;
     use base64::{Engine as _, engine::general_purpose};
     use rayon::prelude::*;
 
@@ -552,7 +553,34 @@ mod macos {
         fn CFDataGetLength(data: CFTypeRef) -> isize;
         fn CGImageGetBytesPerRow(image: CGImageRef) -> usize;
         fn CGImageRelease(image: CGImageRef);
+
+        // CGContext functions for hardware-accelerated scaling
+        fn CGColorSpaceCreateDeviceRGB() -> *const std::ffi::c_void;
+        fn CGColorSpaceRelease(color_space: *const std::ffi::c_void);
+        fn CGBitmapContextCreate(
+            data: *mut std::ffi::c_void,
+            width: usize,
+            height: usize,
+            bits_per_component: usize,
+            bytes_per_row: usize,
+            color_space: *const std::ffi::c_void,
+            bitmap_info: u32,
+        ) -> *const std::ffi::c_void;
+        fn CGBitmapContextGetData(context: *const std::ffi::c_void) -> *mut std::ffi::c_void;
+        fn CGContextRelease(context: *const std::ffi::c_void);
+        fn CGContextDrawImage(context: *const std::ffi::c_void, rect: CGRect, image: CGImageRef);
+        fn CGContextSetInterpolationQuality(context: *const std::ffi::c_void, quality: i32);
     }
+
+    // CGBitmapInfo constants
+    #[allow(non_upper_case_globals)]
+    const kCGImageAlphaPremultipliedLast: u32 = 1;
+    #[allow(non_upper_case_globals)]
+    const kCGBitmapByteOrder32Big: u32 = 4 << 12;
+
+    // CGInterpolationQuality constants
+    #[allow(non_upper_case_globals)]
+    const kCGInterpolationHigh: i32 = 3;
 
     pub fn has_screen_recording_permission() -> bool {
         unsafe { CGPreflightScreenCaptureAccess() }
@@ -592,75 +620,84 @@ mod macos {
 
             let width = CGImageGetWidth(cg_image);
             let height = CGImageGetHeight(cg_image);
-            let bytes_per_row = CGImageGetBytesPerRow(cg_image);
 
             if width == 0 || height == 0 {
                 CGImageRelease(cg_image);
                 return None;
             }
 
-            let data_provider = CGImageGetDataProvider(cg_image);
-            if data_provider.is_null() {
-                CGImageRelease(cg_image);
-                return None;
-            }
-
-            let cf_data = CGDataProviderCopyData(data_provider);
-            if cf_data.is_null() {
-                CGImageRelease(cg_image);
-                return None;
-            }
-
-            let data_ptr = CFDataGetBytePtr(cf_data);
-            let data_len = CFDataGetLength(cf_data) as usize;
-
-            // Fast BGRA to RGBA conversion using chunks
-            let pixel_count = width * height;
-            let mut rgba_data = Vec::with_capacity(pixel_count * 4);
-
-            for y in 0..height {
-                let row_start = y * bytes_per_row;
-                for x in 0..width {
-                    let offset = row_start + x * 4;
-                    if offset + 3 < data_len {
-                        rgba_data.push(*data_ptr.add(offset + 2)); // R
-                        rgba_data.push(*data_ptr.add(offset + 1)); // G
-                        rgba_data.push(*data_ptr.add(offset));     // B
-                        rgba_data.push(*data_ptr.add(offset + 3)); // A
-                    }
-                }
-            }
-
-            CFRelease(cf_data);
-            CGImageRelease(cg_image);
-
-            let img = ImageBuffer::<Rgba<u8>, Vec<u8>>::from_raw(width as u32, height as u32, rgba_data)?;
-
-            let (new_width, new_height) = if img.width() > max_width {
-                let ratio = max_width as f32 / img.width() as f32;
-                (max_width, (img.height() as f32 * ratio) as u32)
+            // Calculate target dimensions
+            let (new_width, new_height) = if width > max_width as usize {
+                let ratio = max_width as f32 / width as f32;
+                (max_width as usize, (height as f32 * ratio) as usize)
             } else {
-                (img.width(), img.height())
+                (width, height)
             };
 
-            let resized = image::imageops::resize(&img, new_width, new_height, FilterType::Nearest);
+            // Use CGContext for hardware-accelerated high-quality scaling
+            let color_space = CGColorSpaceCreateDeviceRGB();
+            let context = CGBitmapContextCreate(
+                std::ptr::null_mut(),
+                new_width,
+                new_height,
+                8,
+                new_width * 4,
+                color_space,
+                kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big,
+            );
+            CGColorSpaceRelease(color_space);
 
-            // Use PNG for faster encoding (no quality loss from conversion)
-            let mut png_data = Vec::new();
-            if image::codecs::png::PngEncoder::new(&mut png_data)
+            if context.is_null() {
+                CGImageRelease(cg_image);
+                return None;
+            }
+
+            // Set high quality interpolation
+            CGContextSetInterpolationQuality(context, kCGInterpolationHigh);
+
+            // Draw the image scaled to target size
+            let rect = CGRect {
+                origin: CGPoint { x: 0.0, y: 0.0 },
+                size: CGSize { width: new_width as f64, height: new_height as f64 },
+            };
+            CGContextDrawImage(context, rect, cg_image);
+            CGImageRelease(cg_image);
+
+            // Get pixel data directly from context (already in RGBA format)
+            let data_ptr = CGBitmapContextGetData(context) as *const u8;
+            if data_ptr.is_null() {
+                CGContextRelease(context);
+                return None;
+            }
+
+            // Convert RGBA to RGB for JPEG
+            let pixel_count = new_width * new_height;
+            let mut rgb_data = Vec::with_capacity(pixel_count * 3);
+            for i in 0..pixel_count {
+                let offset = i * 4;
+                rgb_data.push(*data_ptr.add(offset));     // R
+                rgb_data.push(*data_ptr.add(offset + 1)); // G
+                rgb_data.push(*data_ptr.add(offset + 2)); // B
+            }
+
+            CGContextRelease(context);
+
+            // Encode to JPEG
+            let mut jpeg_data = Vec::with_capacity(pixel_count * 3 / 4);
+            if image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg_data, 80)
                 .write_image(
-                    &resized,
-                    new_width,
-                    new_height,
-                    image::ExtendedColorType::Rgba8,
+                    &rgb_data,
+                    new_width as u32,
+                    new_height as u32,
+                    image::ExtendedColorType::Rgb8,
                 )
                 .is_err()
             {
                 return None;
             }
 
-            let base64_str = general_purpose::STANDARD.encode(&png_data);
-            let data_url = format!("data:image/png;base64,{}", base64_str);
+            let base64_str = general_purpose::STANDARD.encode(&jpeg_data);
+            let data_url = format!("data:image/jpeg;base64,{}", base64_str);
 
             let elapsed = start.elapsed().as_millis();
             if elapsed > 50 {
