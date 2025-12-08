@@ -205,6 +205,14 @@ fn log_debug(msg: String) {
 }
 
 #[tauri::command]
+fn switch_to_english_input() {
+    #[cfg(target_os = "macos")]
+    {
+        macos::switch_to_english_input();
+    }
+}
+
+#[tauri::command]
 fn get_shortcut(config: State<ShortcutConfig>) -> String {
     config.current.lock().unwrap().clone()
 }
@@ -373,6 +381,7 @@ pub fn run() {
             get_shortcut,
             set_shortcut,
             check_screen_recording_permission,
+            switch_to_english_input,
             log_debug
         ])
         .setup(|app| register_shortcuts(app).map_err(Into::into))
@@ -547,6 +556,23 @@ mod macos {
 
     pub fn has_screen_recording_permission() -> bool {
         unsafe { CGPreflightScreenCaptureAccess() }
+    }
+
+    #[link(name = "Carbon", kind = "framework")]
+    extern "C" {
+        fn TISCopyInputSourceForLanguage(language: CFStringRef) -> CFTypeRef;
+        fn TISSelectInputSource(input_source: CFTypeRef) -> i32;
+    }
+
+    pub fn switch_to_english_input() {
+        unsafe {
+            let lang = CFString::new("en");
+            let source = TISCopyInputSourceForLanguage(lang.as_concrete_TypeRef());
+            if !source.is_null() {
+                TISSelectInputSource(source);
+                CFRelease(source);
+            }
+        }
     }
 
     pub fn capture_window_thumbnail(window_id: i64, max_width: u32) -> Option<String> {

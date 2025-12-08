@@ -285,7 +285,15 @@ function App() {
   const [editingShortcut, setEditingShortcut] = useState("");
   const [hasScreenRecordingPermission, setHasScreenRecordingPermission] = useState(true);
   const [showHelp, setShowHelp] = useState(false);
+  const [disableIME, setDisableIME] = useState(() => localStorage.getItem("disableIME") === "true");
   const searchRef = useRef<HTMLInputElement>(null);
+
+  // Apply IME setting immediately when changed
+  useEffect(() => {
+    if (disableIME) {
+      invoke("switch_to_english_input").catch(console.warn);
+    }
+  }, [disableIME]);
   const isComposingRef = useRef(false);
 
   // Save to cache whenever windows update
@@ -307,6 +315,10 @@ function App() {
         searchRef.current?.focus();
       });
     });
+    // Switch to English input if setting is enabled
+    if (localStorage.getItem("disableIME") === "true") {
+      invoke("switch_to_english_input").catch(console.warn);
+    }
   }, []);
 
   const normalizedQuery = query.trim().toLowerCase();
@@ -663,6 +675,20 @@ function App() {
                   className="w-full rounded-lg border border-input bg-background px-3 py-2 text-foreground outline-none focus:border-ring"
                 />
                 <p className="mt-1 text-xs text-muted-foreground">Examples: alt+space, cmd+shift+o, ctrl+`</p>
+              </div>
+              <div>
+                <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={disableIME}
+                    onChange={(e) => {
+                      setDisableIME(e.target.checked);
+                      localStorage.setItem("disableIME", String(e.target.checked));
+                    }}
+                    className="h-4 w-4 rounded border-input accent-primary"
+                  />
+                  Use English Input
+                </label>
               </div>
               <div>
                 <label className="mb-2 block text-sm text-muted-foreground">Theme</label>
