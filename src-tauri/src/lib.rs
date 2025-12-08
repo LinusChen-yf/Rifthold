@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, atomic::{AtomicU64, Ordering}};
 use std::fs;
 use std::path::PathBuf;
 
@@ -108,6 +108,9 @@ struct WindowService {
 struct ShortcutConfig {
     current: Mutex<String>,
 }
+
+/// Counter to cancel stale refresh requests
+static REFRESH_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 impl WindowService {
     fn new(provider: Arc<dyn WindowProvider>) -> Self {
@@ -238,28 +241,55 @@ fn set_shortcut(app: AppHandle, config: State<ShortcutConfig>, shortcut: String)
 
 #[tauri::command]
 async fn refresh_windows_async(app: tauri::AppHandle, service: State<'_, WindowService>) -> Result<(), String> {
-    // Get window list without thumbnails (synchronously, before spawn)
-    let windows = service.list(false);
+    // Increment generation to cancel any in-flight tasks
+    let current_gen = REFRESH_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
 
-    // Emit window list immediately
-    let _ = app.emit("windows:list", &windows);
+    // Clone the provider Arc to move into spawned task
+    let provider = service.provider.clone();
 
-    // Spawn async task to load thumbnails concurrently
+    // Spawn the entire refresh operation to avoid blocking the main thread
     tauri::async_runtime::spawn(async move {
-        let batch_start = std::time::Instant::now();
-        let mut tasks = vec![];
+        // Check if this request is still current
+        if REFRESH_GENERATION.load(Ordering::SeqCst) != current_gen {
+            return;
+        }
 
-        // Spawn a task for each window to capture thumbnail concurrently
+        // Get window list in a blocking task (it calls CoreGraphics APIs)
+        let windows = tauri::async_runtime::spawn_blocking(move || {
+            provider.list(false)
+        }).await.unwrap_or_default();
+
+        // Check again after getting window list
+        if REFRESH_GENERATION.load(Ordering::SeqCst) != current_gen {
+            println!("[thumbnail] stale after list fetch (gen {})", current_gen);
+            return;
+        }
+
+        // Emit window list immediately
+        let _ = app.emit("windows:list", &windows);
+
+        let batch_start = std::time::Instant::now();
+
+        // Spawn all thumbnail tasks in parallel for maximum speed
+        let mut tasks = Vec::with_capacity(windows.len());
         for window in windows.iter() {
             if let Ok(window_id) = window.id.parse::<i64>() {
                 let window_id_str = window.id.clone();
                 let app_clone = app.clone();
 
-                // Use spawn_blocking for CPU-intensive synchronous work
                 let task = tauri::async_runtime::spawn_blocking(move || {
+                    // Check if still current before doing expensive work
+                    if REFRESH_GENERATION.load(Ordering::SeqCst) != current_gen {
+                        return;
+                    }
+
                     #[cfg(target_os = "macos")]
                     {
                         if let Some(thumbnail) = macos::capture_window_thumbnail(window_id, 500) {
+                            // Check before emitting
+                            if REFRESH_GENERATION.load(Ordering::SeqCst) != current_gen {
+                                return;
+                            }
                             let payload = serde_json::json!({
                                 "id": window_id_str,
                                 "thumbnail": thumbnail
@@ -268,19 +298,21 @@ async fn refresh_windows_async(app: tauri::AppHandle, service: State<'_, WindowS
                         }
                     }
                 });
-
                 tasks.push(task);
             }
         }
 
-        // Wait for all thumbnail tasks to complete
+        // Wait for all tasks (they will self-cancel via generation check)
         for task in tasks {
             let _ = task.await;
         }
 
-        let total_elapsed = batch_start.elapsed().as_millis();
-        println!("[thumbnail] batch complete: {} windows in {}ms", windows.len(), total_elapsed);
-        let _ = app.emit("windows:thumbnails-complete", ());
+        // Only emit completion if this is still the current generation
+        if REFRESH_GENERATION.load(Ordering::SeqCst) == current_gen {
+            let total_elapsed = batch_start.elapsed().as_millis();
+            println!("[thumbnail] batch complete: {} windows in {}ms (gen {})", windows.len(), total_elapsed, current_gen);
+            let _ = app.emit("windows:thumbnails-complete", ());
+        }
     });
 
     Ok(())
@@ -384,7 +416,15 @@ pub fn run() {
             switch_to_english_input,
             log_debug
         ])
-        .setup(|app| register_shortcuts(app).map_err(Into::into))
+        .setup(|app| {
+            // Warm up the window list API in background to avoid first-call latency
+            let provider = app.state::<WindowService>().provider.clone();
+            std::thread::spawn(move || {
+                let _ = provider.list(false);
+                println!("[rifthold] window list API warmed up");
+            });
+            register_shortcuts(app).map_err(Into::into)
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
@@ -964,13 +1004,6 @@ mod macos {
                         thumbnail: None,
                     })
                     .collect();
-
-                let total_elapsed = started_at.elapsed().as_millis();
-                println!(
-                    "[rifthold][macos] list_windows completed: windows={} total_ms={}",
-                    results.len(),
-                    total_elapsed
-                );
 
                 results
             };
