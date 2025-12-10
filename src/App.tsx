@@ -519,6 +519,16 @@ function App() {
         return;
       }
 
+      // Command + 1-9 to quickly switch to window
+      if (event.metaKey && !event.ctrlKey) {
+        const num = parseInt(event.key);
+        if (num >= 1 && num <= 9 && filteredWindows[num - 1]) {
+          event.preventDefault();
+          activateWindow(filteredWindows[num - 1]);
+          return;
+        }
+      }
+
       // Skip other modifier keys
       if (event.metaKey || event.ctrlKey) return;
 
