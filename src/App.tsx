@@ -244,7 +244,7 @@ const WindowCard = memo(function WindowCard({
           </p>
         </div>
         <div className="flex items-center justify-between text-xs text-muted-foreground">
-          <span className="rounded-full bg-muted px-2 py-1">#{index + 1}</span>
+          <span className="rounded-full bg-muted px-2 py-1">⌘{index + 1}</span>
           <span className="hidden items-center gap-1 rounded-full border border-border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] sm:flex">
             Enter to switch
           </span>
